@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=0.1"/>
+<title>VC Scoresheet — Live</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1a1a2e; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  #sheet-container { padding: 4px; }
+  /* On mobile show a rotate hint */
+  #rotate-hint {
+    display: none;
+    position: fixed; top: 0; left: 0; right: 0;
+    background: #c8102e; color: #fff;
+    font-family: monospace; font-size: 12px;
+    padding: 6px 12px; text-align: center; z-index: 200;
+  }
+  @media (max-width: 600px) {
+    #status-bar { font-size: 10px; gap: 8px; padding: 5px 8px; }
+    .sb-score { font-size: 12px; }
+  }
+  #status-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(10,10,20,0.92);
+    border-top: 2px solid #c8102e;
+    padding: 6px 16px;
+    display: flex; align-items: center; gap: 16px;
+    font-family: 'Roboto Mono', monospace; font-size: 12px; color: #888; z-index: 100;
+  }
+  .sb-score { color: #fff; font-weight: 700; font-size: 14px; }
+  .sb-set { color: #c9a84c; }
+  .sb-server { color: #93c5fd; }
+  .sb-conn { margin-left: auto; font-size: 11px; }
+  .sb-conn.connected { color: #4ade80; }
+  .sb-conn.waiting { color: #666; }
+  #no-state {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; flex-direction: column; gap: 12px;
+    color: #666; font-family: 'Roboto Mono', monospace; font-size: 13px;
+  }
+  #no-state .icon { font-size: 48px; }
+  #no-state .hint { color: #444; font-size: 11px; }
+</style>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div id="rotate-hint">📱 Tip: Rotate to landscape for best view — or pinch to zoom</div>
+
+<div id="mobile-controls" style="display:none;position:fixed;top:8px;right:8px;z-index:150;display:flex;flex-direction:column;gap:4px;">
+  <button onclick="zoomIn()" style="width:36px;height:36px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;font-size:18px;cursor:pointer;">+</button>
+  <button onclick="zoomOut()" style="width:36px;height:36px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;font-size:18px;cursor:pointer;">−</button>
+  <button onclick="zoomFit()" style="width:36px;height:36px;background:#333;color:#fff;border:1px solid #555;border-radius:4px;font-size:11px;cursor:pointer;line-height:1;">FIT</button>
+</div>
+
+<div id="no-state">
+  <div class="icon">📋</div>
+  <div>Waiting for match data from manager…</div>
+  <div class="hint">Open manager.html and start a match to populate this sheet.</div>
+</div>
+
+<div id="sheet-container" style="display:none;padding-bottom:32px;"></div>
+
+<div id="status-bar">
+  <span class="sb-set">Set <span id="sb-set">—</span></span>
+  <span class="sb-score">
+    <span id="sb-nameA">A</span> <span id="sb-scoreA">0</span>
+    <span style="color:#555;"> : </span>
+    <span id="sb-scoreB">0</span> <span id="sb-nameB">B</span>
+  </span>
+  <span class="sb-server">⚡ <span id="sb-server">—</span></span>
+  <span class="sb-conn waiting" id="sb-conn">⬤ Waiting for manager</span>
+</div>
+
+<script src="scoresheet.js"></script>
+<script>
+  let initialized = false;
+
+  // ── Receive postMessage from manager window ──────────────────
+  window.addEventListener('message', function(e) {
+    const msg = e.data;
+    if (!msg || !msg.type) return;
+    if (msg.type === 'SS_UPDATE' && msg.state) applyState(msg.state);
+    if (msg.type === 'SS_PING' && e.source) e.source.postMessage({ type: 'SS_PONG' }, '*');
+  });
+
+  // ── localStorage fallback (same browser, different tabs) ─────
+  setInterval(function() {
+    try {
+      const raw = localStorage.getItem('ss_live_state');
+      if (!raw) return;
+      const p = JSON.parse(raw);
+      if (p && p.state && (Date.now() - p.ts) < 8000) applyState(p.state);
+    } catch(e) {}
+  }, 800);
+
+  function applyState(state) {
+    if (!initialized) {
+      document.getElementById('no-state').style.display = 'none';
+      document.getElementById('sheet-container').style.display = 'block';
+      ScoresheetAPI.init(document.getElementById('sheet-container'));
+      ScoresheetAPI._rescale = ScoresheetAPI._rescale || function(){
+        if(window.ScoresheetAPI) ScoresheetAPI.init && ScoresheetAPI.init._scaleSheet && ScoresheetAPI.init._scaleSheet();
+      };
+      initialized = true;
+      showMobileControls();
+    }
+    ScoresheetAPI.update(state);
+    updateStatusBar(state);
+    const el = document.getElementById('sb-conn');
+    el.textContent = '⬤ Live';
+    el.className = 'sb-conn connected';
+  }
+
+  function updateStatusBar(state) {
+    const si = state.currentSet || 0;
+    const set = state.sets && state.sets[si];
+    document.getElementById('sb-set').textContent = si + 1;
+    document.getElementById('sb-nameA').textContent = state.teamA || 'A';
+    document.getElementById('sb-nameB').textContent = state.teamB || 'B';
+    document.getElementById('sb-scoreA').textContent = set ? set.score.A : 0;
+    document.getElementById('sb-scoreB').textContent = set ? set.score.B : 0;
+    if (set && set.serving) {
+      const rot = set.rotation && set.rotation[set.serving];
+      const num = rot && rot[0] ? ` #${rot[0]}` : '';
+      document.getElementById('sb-server').textContent =
+        (set.serving === 'A' ? state.teamA : state.teamB) + num;
+    } else {
+      document.getElementById('sb-server').textContent = '—';
+    }
+  }
+
+  // Tell opener we're ready
+  if (window.opener) {
+    try { window.opener.postMessage({ type: 'SS_READY' }, '*'); } catch(e) {}
+  }
+
+  // ── Mobile zoom controls ─────────────────────────────────────
+  let _manualScale = null;
+
+  function zoomIn() {
+    const root = document.getElementById('sheet-root');
+    if (!root) return;
+    const cur = _manualScale || parseFloat(root.style.transform.replace('scale(','')) || 1;
+    setManualScale(Math.min(cur + 0.1, 2));
+  }
+  function zoomOut() {
+    const root = document.getElementById('sheet-root');
+    if (!root) return;
+    const cur = _manualScale || parseFloat(root.style.transform.replace('scale(','')) || 1;
+    setManualScale(Math.max(cur - 0.1, 0.15));
+  }
+  function zoomFit() {
+    _manualScale = null;
+    if (window.ScoresheetAPI) ScoresheetAPI._rescale();
+  }
+  function setManualScale(s) {
+    _manualScale = s;
+    const root = document.getElementById('sheet-root');
+    const wrapper = document.getElementById('sheet-scale-wrapper');
+    if (!root || !wrapper) return;
+    root.style.transform = 'scale(' + s + ')';
+    root.style.transformOrigin = 'top left';
+    wrapper.style.width  = (1600 * s) + 'px';
+    wrapper.style.height = (1020 * s) + 'px';
+  }
+
+  // Show mobile controls when sheet is visible
+  function showMobileControls() {
+    const ctrl = document.getElementById('mobile-controls');
+    if (ctrl && window.innerWidth < 900) ctrl.style.display = 'flex';
+    // Show rotate hint briefly
+    const hint = document.getElementById('rotate-hint');
+    if (hint && window.innerWidth < 600 && window.innerHeight > window.innerWidth) {
+      hint.style.display = 'block';
+      setTimeout(() => { hint.style.display = 'none'; }, 4000);
+    }
+  }
+
+  const _origApply = applyState;
+  // Expose rescale publicly for zoomFit
+  window.ScoresheetAPI = window.ScoresheetAPI || {};
+
+</script>
+</body>
+</html>
